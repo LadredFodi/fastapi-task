@@ -1,28 +1,62 @@
-import datetime
-from datetime import timedelta
+"""FastAPI application main module."""
+
+import os
+import typing
+from datetime import datetime, timedelta, timezone
+
 import uvicorn
-
-from fastapi import FastAPI, Depends
-from sqlalchemy import select, update, insert
+from fastapi import Depends, FastAPI, status
+from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from fastapi import status
 
-from db_models import *
-from exceptions import UserAlreadyExistsException, UserNotExistsException, UserAlreadyBlockedException, \
-    UserAlreadyActiveException, BadRequestDataException, NegativeBalanceException, TransactionNotExistsException, \
-    TransactionDoesNotBelongToUserException, UpdateTransactionForBlockedUserException, \
-    TransactionAlreadyRollbackedException, CreateTransactionForBlockedUserException
-from python_models import *
-from queries import get_registered_users_count, get_registered_and_deposit_users_count, \
-    get_registered_and_not_rollbacked_deposit_users_count, get_not_rollbacked_deposit_amount, \
-    get_not_rollbacked_withdraw_amount, get_transactions_count, get_not_rollbacked_transactions_count
+from db_models import Base, Transaction, User, UserBalance
+from exceptions import (
+    BadRequestDataException,
+    CreateTransactionForBlockedUserException,
+    NegativeBalanceException,
+    TransactionAlreadyRollbackedException,
+    TransactionDoesNotBelongToUserException,
+    TransactionNotExistsException,
+    UpdateTransactionForBlockedUserException,
+    UserAlreadyActiveException,
+    UserAlreadyBlockedException,
+    UserAlreadyExistsException,
+    UserNotExistsException,
+)
+from python_models import (
+    CurrencyEnum,
+    RequestTransactionModel,
+    RequestUserModel,
+    RequestUserUpdateModel,
+    ResponseUserModel,
+    TransactionModel,
+    TransactionStatusEnum,
+    UserModel,
+    UserStatusEnum,
+)
+from queries import (
+    get_not_rollbacked_deposit_amount,
+    get_not_rollbacked_transactions_count,
+    get_not_rollbacked_withdraw_amount,
+    get_registered_and_deposit_users_count,
+    get_registered_and_not_rollbacked_deposit_users_count,
+    get_registered_users_count,
+    get_transactions_count,
+)
 
+db_user = os.getenv("POSTGRES_USER", "postgres")
+db_password = os.getenv("POSTGRES_PASSWORD", "postgres")
+db_host = os.getenv("POSTGRES_HOST", "localhost")
+db_port = os.getenv("POSTGRES_PORT", "5432")
+db_name = os.getenv("POSTGRES_DB", "fastapi_db")
 
-engine = create_async_engine("sqlite+aiosqlite:///db.sqlite3")
+database_url = f"postgresql+asyncpg://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+engine = create_async_engine(database_url, echo=False)
 async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
 
-async def create_db_and_tables():
+async def create_db_and_tables() -> None:
+    """Create database and tables."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -36,10 +70,12 @@ app = FastAPI()
 
 
 @app.on_event("startup")
-async def on_startup(session: AsyncSession = Depends(get_async_session)):
+async def on_startup(session: AsyncSession = Depends(get_async_session)) -> None:
+    """Initialize database on startup."""
     await create_db_and_tables()
 
-@app.get("/users", response_model=typing.Optional[list[ResponseUserModel]] | None, status_code=status.HTTP_200_OK)
+
+@app.get("/users", response_model=typing.List[ResponseUserModel], status_code=status.HTTP_200_OK)
 async def get_users(
     user_id: typing.Optional[int] = None,
     email: typing.Optional[str] = None,
@@ -57,13 +93,20 @@ async def get_users(
     users = users.scalars()
     results = []
     for user in users:
-        result = ResponseUserModel(id=user.id, email=user.email, status=UserStatusEnum(user.status), created=user.created)
+        result = ResponseUserModel(
+            id=user.id, email=user.email, status=UserStatusEnum(user.status), created=user.created
+        )
         balances = await session.execute(select(UserBalance).where(UserBalance.user_id == user.id))
         balances = balances.scalars()
-        balances = sorted([{"currency": b.currency, "amount": b.amount} for b in balances], key=lambda x: x["amount"])
-        result.balances = balances
+        from python_models import ResponseUserBalanceModel
+        balances_list = [
+            ResponseUserBalanceModel(currency=CurrencyEnum(b.currency), amount=float(b.amount))
+            for b in balances
+        ]
+        balances_list = sorted(balances_list, key=lambda x: x.amount if x.amount is not None else 0.0)
+        result.balances = balances_list
         results.append(result)
-    return sorted(results, key=lambda x: x.created)
+    return sorted(results, key=lambda x: x.created if x.created else datetime.min.replace(tzinfo=timezone.utc))
 
 
 @app.post("/users", status_code=status.HTTP_200_OK)
@@ -72,44 +115,53 @@ async def post_user(user: RequestUserModel, session: AsyncSession = Depends(get_
     email = ''.join([x for x in email if x != ' '])
     if len(email) == 0:
         raise BadRequestDataException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Email can't consist entirely of spaces")
-    db_user = await session.execute(select(User).where(User.email==user.email))
+    db_user = await session.execute(select(User).where(User.email == user.email))
     if db_user.scalar():
-        raise UserAlreadyExistsException(status_code=status.HTTP_409_CONFLICT, detail="User with email=`{0}` already exists".format(user.email))
-    db_user = User(email=user.email, status="ACTIVE", created=datetime.utcnow())
+        raise UserAlreadyExistsException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"User with email=`{user.email}` already exists"
+        )
+    db_user = User(email=user.email, status="ACTIVE", created=datetime.now(timezone.utc))
     session.add(db_user)
     await session.commit()
     currencies = list({str(x) for x in CurrencyEnum})
     for currency in currencies:
-        user_balance = UserBalance(user_id=db_user.id, currency=currency, amount=0, created=datetime.utcnow())
+        user_balance = UserBalance(user_id=db_user.id, currency=currency, amount=0, created=datetime.now(timezone.utc))
         session.add(user_balance)
         await session.commit()
-    result = await session.execute(select(User).where(User.email==user.email))
+    result = await session.execute(select(User).where(User.email == user.email))
     result = result.scalar()
     result = UserModel(id=result.id, email=result.email, status=UserStatusEnum(result.status), created=result.created)
     return result
 
 
-@app.patch("/users/{user_id}", response_model=typing.Optional[UserModel] | None)
+@app.patch("/users/{user_id}", response_model=UserModel)
 async def patch_user(user_id: int, user: RequestUserUpdateModel, session: AsyncSession = Depends(get_async_session)):
     if user_id < 0:
         raise BadRequestDataException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unprocessable data in request")
-    db_user = await session.execute(select(User).where(User.id==user_id))
+    db_user = await session.execute(select(User).where(User.id == user_id))
     db_user = db_user.scalar()
     if not db_user:
-        raise UserNotExistsException(status_code=status.HTTP_404_NOT_FOUND, detail="User with id=`{0}` does not exist".format(user_id))
+        raise UserNotExistsException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"User with id=`{user_id}` does not exist"
+        )
     if db_user.status == "BLOCKED" and user.status == "BLOCKED":
-        raise UserAlreadyBlockedException(status_code=status.HTTP_400_BAD_REQUEST, detail="User with id=`{0}` is already blocked".format(user_id))
+        raise UserAlreadyBlockedException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"User with id=`{user_id}` is already blocked"
+        )
     if db_user.status == "ACTIVE" and user.status == "ACTIVE":
-        raise UserAlreadyActiveException(status_code=status.HTTP_400_BAD_REQUEST, detail="User with id=`{0}` is already active".format(user_id))
-    await session.execute(update(User).values(**{"status": user.status}).where(User.id==user_id))
+        raise UserAlreadyActiveException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"User with id=`{user_id}` is already active"
+        )
+    await session.execute(update(User).values(**{"status": user.status}).where(User.id == user_id))
     await session.commit()
-    user = await session.execute(select(User).where(User.id==user_id))
+    user = await session.execute(select(User).where(User.id == user_id))
     user = user.scalar()
     result = UserModel(id=user.id, email=user.email, status=UserStatusEnum(user.status), created=user.created)
     return result
 
 
-@app.get("/transactions", response_model=typing.Optional[list[TransactionModel]] | None, status_code=status.HTTP_200_OK)
+@app.get("/transactions", response_model=typing.List[TransactionModel], status_code=status.HTTP_200_OK)
 async def get_transactions(
     user_id: typing.Optional[int] = None,
     session: AsyncSession = Depends(get_async_session)
@@ -126,7 +178,7 @@ async def get_transactions(
             **{
                 "id": t.id,
                 "user_id": t.user_id,
-                "currency":CurrencyEnum(t.currency),
+                "currency": CurrencyEnum(t.currency),
                 "amount": t.amount,
                 "status": TransactionStatusEnum(t.status),
                 "created": t.created
@@ -136,7 +188,7 @@ async def get_transactions(
     return results
 
 
-@app.post("/{user_id}/transactions", response_model=typing.Optional[TransactionModel] | None, status_code=status.HTTP_200_OK)
+@app.post("/{user_id}/transactions", response_model=TransactionModel, status_code=status.HTTP_200_OK)
 async def post_transaction(user_id: int, transaction: RequestTransactionModel, session: AsyncSession = Depends(get_async_session)):
     if user_id < 0:
         raise BadRequestDataException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unprocessable data in request")
@@ -145,55 +197,77 @@ async def post_transaction(user_id: int, transaction: RequestTransactionModel, s
     if transaction.amount == 0:
         raise BadRequestDataException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Transaction can not have zero amount")
 
-    db_user = await session.execute(select(User).where(User.id==user_id))
+    db_user = await session.execute(select(User).where(User.id == user_id))
     db_user = db_user.scalar()
     if not db_user:
-        raise UserNotExistsException(status_code=status.HTTP_404_NOT_FOUND, detail="User with id=`{0}` does not exist".format(user_id))
+        raise UserNotExistsException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"User with id=`{user_id}` does not exist"
+        )
     if db_user.status != "ACTIVE":
-        raise CreateTransactionForBlockedUserException(status_code=status.HTTP_404_NOT_FOUND, detail="User with id=`{0}` is blocked".format(user_id))
+        raise CreateTransactionForBlockedUserException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"User with id=`{user_id}` is blocked"
+        )
 
-    db_user_balance = await session.execute(select(UserBalance).where((UserBalance.user_id==user_id) & (UserBalance.currency == transaction.currency)))
+    db_user_balance = await session.execute(
+        select(UserBalance).where((UserBalance.user_id == user_id) & (UserBalance.currency == transaction.currency))
+    )
     db_user_balance = db_user_balance.scalar()
     if float(db_user_balance.amount) + transaction.amount < 0:
         raise NegativeBalanceException(status_code=status.HTTP_400_BAD_REQUEST, detail="Negative balance")
 
-    await session.execute(update(UserBalance).values(**{"amount": transaction.amount}).where(UserBalance.id==db_user_balance.id))
+    await session.execute(
+        update(UserBalance).values(**{"amount": transaction.amount}).where(UserBalance.id == db_user_balance.id)
+    )
     await session.commit()
-    await session.execute(insert(Transaction).values(
-        **{"user_id": db_user.id, "currency": transaction.currency, "amount": transaction.amount, "status": "PROCESSED", "created": datetime.utcnow()})
+    await session.execute(
+        insert(Transaction).values(
+            **{
+                "user_id": db_user.id,
+                "currency": transaction.currency,
+                "amount": transaction.amount,
+                "status": "PROCESSED",
+                "created": datetime.now(timezone.utc)
+            }
+        )
     )
     await session.commit()
 
 
-
-@app.patch("/{user_id}/transactions/{transaction_id}", response_model=typing.Optional[TransactionModel] | None)
+@app.patch("/{user_id}/transactions/{transaction_id}", response_model=TransactionModel)
 async def patch_rollback_transaction(user_id: int, transaction_id: int, session: AsyncSession = Depends(get_async_session)):
     if user_id < 0 or transaction_id < 0:
         raise BadRequestDataException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unprocessable data in request")
-    db_user = await session.execute(select(User).where(User.id==user_id))
+    db_user = await session.execute(select(User).where(User.id == user_id))
     db_user = db_user.scalar()
     if not db_user:
-        raise UserNotExistsException(status_code=status.HTTP_404_NOT_FOUND, detail="User with id=`{0}` does not exist".format(user_id))
-    db_transaction = await session.execute(select(Transaction).where(Transaction.id==transaction_id))
+        raise UserNotExistsException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"User with id=`{user_id}` does not exist"
+        )
+    db_transaction = await session.execute(select(Transaction).where(Transaction.id == transaction_id))
     db_transaction = db_transaction.scalar()
     if not db_transaction:
         raise TransactionNotExistsException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Transaction with id=`{0}` does not exist".format(transaction_id)
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Transaction with id=`{transaction_id}` does not exist"
         )
     if db_transaction.user_id != db_user.id:
         raise TransactionDoesNotBelongToUserException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Transaction with id=`{0}` does not belong to user with id=`{1}`".format(transaction_id, user_id)
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Transaction with id=`{transaction_id}` does not belong to user with id=`{user_id}`"
         )
     if db_transaction.status == "ROLLBACKED":
         raise TransactionAlreadyRollbackedException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Transaction with id=`{0}` is already rollbacked".format(transaction_id)
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Transaction with id=`{transaction_id}` is already rollbacked"
         )
     if db_user.status == "BLOCKED":
         raise UpdateTransactionForBlockedUserException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="User with id=`{0}` is blocked".format(user_id)
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"User with id=`{user_id}` is blocked"
         )
 
-    db_user_balance = await session.execute(select(UserBalance).where((UserBalance.user_id==user_id) & (UserBalance.currency == db_transaction.currency)))
+    db_user_balance = await session.execute(
+        select(UserBalance).where((UserBalance.user_id == user_id) & (UserBalance.currency == db_transaction.currency))
+    )
     db_user_balance = db_user_balance.scalar()
     new_amount = float(db_user_balance.amount)
     if db_transaction.amount < 0:
@@ -202,16 +276,19 @@ async def patch_rollback_transaction(user_id: int, transaction_id: int, session:
         new_amount -= float(db_transaction.amount)
     if new_amount < 0:
         raise NegativeBalanceException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Negative balance: {new_amount}")
-    await session.execute(update(UserBalance).values(**{"amount": new_amount}).where(UserBalance.id==db_user_balance.id))
+    await session.execute(
+        update(UserBalance).values(**{"amount": new_amount}).where(UserBalance.id == db_user_balance.id)
+    )
     await session.commit()
-    await session.execute(update(Transaction).values(**{"status": "ROLLBACKED"}))
+    await session.execute(update(Transaction).values(**{"status": "ROLLBACKED"}).where(Transaction.id == transaction_id))
     await session.commit()
 
 
-@app.get("/transactions/analysis", response_model=typing.Optional[list] | None, status_code=status.HTTP_200_OK)
-async def get_transaction_analysis(session: AsyncSession = Depends(get_async_session)) -> typing.List[dict]:
-    dt_gt = datetime.utcnow().date() - timedelta(weeks=1) + timedelta(days=1)
-    dt_lt = datetime.utcnow().date()
+@app.get("/transactions/analysis", response_model=typing.List[typing.Dict[str, typing.Any]], status_code=status.HTTP_200_OK)
+async def get_transaction_analysis(session: AsyncSession = Depends(get_async_session)) -> typing.List[typing.Dict[str, typing.Any]]:
+    """Get transaction analysis for the last 52 weeks."""
+    dt_gt = datetime.now(timezone.utc).date() - timedelta(weeks=1) + timedelta(days=1)
+    dt_lt = datetime.now(timezone.utc).date()
     results = []
     for i in range(52):
         registered_users_count = await get_registered_users_count(session, dt_gt=dt_gt, dt_lt=dt_lt)
@@ -241,13 +318,13 @@ async def get_transaction_analysis(session: AsyncSession = Depends(get_async_ses
             "transactions_count",
             "not_rollbacked_transactions_count",
         ):
-            if result[field] > 0:
+            field_value = result[field]
+            if isinstance(field_value, (int, float)) and field_value > 0:
                 results.append(result)
                 break
         dt_gt -= timedelta(weeks=1)
         dt_lt -= timedelta(weeks=1)
     return results
-
 
 
 if __name__ == "__main__":

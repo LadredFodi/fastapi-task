@@ -1,25 +1,45 @@
 from fastapi import HTTPException
 
 
-class UserAlreadyExistsException(HTTPException): ...
+class UserAlreadyExistsException(HTTPException):
+    """Exception raised when user already exists."""
 
-class UserNotExistsException(HTTPException): ...
 
-class UserAlreadyBlockedException(HTTPException): ...
+class UserNotExistsException(HTTPException):
+    """Exception raised when user does not exist."""
 
-class UserAlreadyActiveException(HTTPException): ...
 
-class BadRequestDataException(HTTPException): ...
+class UserAlreadyBlockedException(HTTPException):
+    """Exception raised when user is already blocked."""
 
-class NegativeBalanceException(HTTPException): ...
 
-class TransactionNotExistsException(HTTPException): ...
+class UserAlreadyActiveException(HTTPException):
+    """Exception raised when user is already active."""
 
-class TransactionDoesNotBelongToUserException(HTTPException): ...
 
-class CreateTransactionForBlockedUserException(HTTPException): ...
+class BadRequestDataException(HTTPException):
+    """Exception raised for bad request data."""
 
-class UpdateTransactionForBlockedUserException(HTTPException): ...
 
-class TransactionAlreadyRollbackedException(HTTPException): ...
+class NegativeBalanceException(HTTPException):
+    """Exception raised when balance would become negative."""
 
+
+class TransactionNotExistsException(HTTPException):
+    """Exception raised when transaction does not exist."""
+
+
+class TransactionDoesNotBelongToUserException(HTTPException):
+    """Exception raised when transaction does not belong to user."""
+
+
+class CreateTransactionForBlockedUserException(HTTPException):
+    """Exception raised when trying to create transaction for blocked user."""
+
+
+class UpdateTransactionForBlockedUserException(HTTPException):
+    """Exception raised when trying to update transaction for blocked user."""
+
+
+class TransactionAlreadyRollbackedException(HTTPException):
+    """Exception raised when transaction is already rollbacked."""
