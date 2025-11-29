@@ -1,16 +1,13 @@
 """FastAPI application main module."""
 
-import os
 import typing
 from datetime import datetime, timedelta, timezone
 
-import uvicorn
-from fastapi import Depends, FastAPI, status
-from sqlalchemy import insert, select, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from db_models import Base, Transaction, User, UserBalance
-from exceptions import (
+from db.db import SessionDep
+from db.models import Transaction, User, UserBalance
+from fastapi import APIRouter, status
+from schemas.enums import CurrencyEnum, TransactionStatusEnum, UserStatusEnum
+from schemas.exceptions import (
     BadRequestDataException,
     CreateTransactionForBlockedUserException,
     NegativeBalanceException,
@@ -23,18 +20,16 @@ from exceptions import (
     UserAlreadyExistsException,
     UserNotExistsException,
 )
-from python_models import (
-    CurrencyEnum,
+from schemas.pydantic_models import (
     RequestTransactionModel,
     RequestUserModel,
     RequestUserUpdateModel,
+    ResponseUserBalanceModel,
     ResponseUserModel,
     TransactionModel,
-    TransactionStatusEnum,
     UserModel,
-    UserStatusEnum,
 )
-from queries import (
+from services.queries import (
     get_not_rollbacked_deposit_amount,
     get_not_rollbacked_transactions_count,
     get_not_rollbacked_withdraw_amount,
@@ -43,44 +38,17 @@ from queries import (
     get_registered_users_count,
     get_transactions_count,
 )
+from sqlalchemy import insert, select, update
 
-db_user = os.getenv("POSTGRES_USER", "postgres")
-db_password = os.getenv("POSTGRES_PASSWORD", "postgres")
-db_host = os.getenv("POSTGRES_HOST", "localhost")
-db_port = os.getenv("POSTGRES_PORT", "5432")
-db_name = os.getenv("POSTGRES_DB", "fastapi_db")
-
-database_url = f"postgresql+asyncpg://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-engine = create_async_engine(database_url, echo=False)
-async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
+router = APIRouter()
 
 
-async def create_db_and_tables() -> None:
-    """Create database and tables."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
-async def get_async_session() -> typing.AsyncGenerator[AsyncSession, None]:
-    async with async_session_maker() as session:
-        yield session
-
-
-app = FastAPI()
-
-
-@app.on_event("startup")
-async def on_startup(session: AsyncSession = Depends(get_async_session)) -> None:
-    """Initialize database on startup."""
-    await create_db_and_tables()
-
-
-@app.get("/users", response_model=typing.List[ResponseUserModel], status_code=status.HTTP_200_OK)
+@router.get("/users", response_model=typing.List[ResponseUserModel], status_code=status.HTTP_200_OK)
 async def get_users(
+    session: SessionDep,
     user_id: typing.Optional[int] = None,
     email: typing.Optional[str] = None,
     user_status: typing.Optional[str] = None,
-    session: AsyncSession = Depends(get_async_session)
 ) -> typing.List[ResponseUserModel]:
     q = select(User).order_by(User.created.desc())
     if user_id is not None:
@@ -98,7 +66,7 @@ async def get_users(
         )
         balances = await session.execute(select(UserBalance).where(UserBalance.user_id == user.id))
         balances = balances.scalars()
-        from python_models import ResponseUserBalanceModel
+
         balances_list = [
             ResponseUserBalanceModel(currency=CurrencyEnum(b.currency), amount=float(b.amount))
             for b in balances
@@ -109,8 +77,8 @@ async def get_users(
     return sorted(results, key=lambda x: x.created if x.created else datetime.min.replace(tzinfo=timezone.utc))
 
 
-@app.post("/users", status_code=status.HTTP_200_OK)
-async def post_user(user: RequestUserModel, session: AsyncSession = Depends(get_async_session)):
+@router.post("/users", status_code=status.HTTP_200_OK)
+async def post_user(user: RequestUserModel, session: SessionDep):
     email = user.email.strip()
     email = ''.join([x for x in email if x != ' '])
     if len(email) == 0:
@@ -135,8 +103,8 @@ async def post_user(user: RequestUserModel, session: AsyncSession = Depends(get_
     return result
 
 
-@app.patch("/users/{user_id}", response_model=UserModel)
-async def patch_user(user_id: int, user: RequestUserUpdateModel, session: AsyncSession = Depends(get_async_session)):
+@router.patch("/users/{user_id}", response_model=UserModel)
+async def patch_user(user_id: int, user: RequestUserUpdateModel, session: SessionDep):
     if user_id < 0:
         raise BadRequestDataException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unprocessable data in request")
     db_user = await session.execute(select(User).where(User.id == user_id))
@@ -161,10 +129,10 @@ async def patch_user(user_id: int, user: RequestUserUpdateModel, session: AsyncS
     return result
 
 
-@app.get("/transactions", response_model=typing.List[TransactionModel], status_code=status.HTTP_200_OK)
+@router.get("/transactions", response_model=typing.List[TransactionModel], status_code=status.HTTP_200_OK)
 async def get_transactions(
+    session: SessionDep,
     user_id: typing.Optional[int] = None,
-    session: AsyncSession = Depends(get_async_session)
 ) -> typing.List[TransactionModel]:
     q = select(Transaction).order_by(Transaction.created.desc())
     if user_id:
@@ -188,8 +156,8 @@ async def get_transactions(
     return results
 
 
-@app.post("/{user_id}/transactions", response_model=TransactionModel, status_code=status.HTTP_200_OK)
-async def post_transaction(user_id: int, transaction: RequestTransactionModel, session: AsyncSession = Depends(get_async_session)):
+@router.post("/{user_id}/transactions", response_model=TransactionModel, status_code=status.HTTP_200_OK)
+async def post_transaction(user_id: int, transaction: RequestTransactionModel, session: SessionDep):
     if user_id < 0:
         raise BadRequestDataException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unprocessable data in request")
     if transaction.currency not in {str(x) for x in CurrencyEnum}:
@@ -233,8 +201,8 @@ async def post_transaction(user_id: int, transaction: RequestTransactionModel, s
     await session.commit()
 
 
-@app.patch("/{user_id}/transactions/{transaction_id}", response_model=TransactionModel)
-async def patch_rollback_transaction(user_id: int, transaction_id: int, session: AsyncSession = Depends(get_async_session)):
+@router.patch("/{user_id}/transactions/{transaction_id}", response_model=TransactionModel)
+async def patch_rollback_transaction(user_id: int, transaction_id: int, session: SessionDep):
     if user_id < 0 or transaction_id < 0:
         raise BadRequestDataException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unprocessable data in request")
     db_user = await session.execute(select(User).where(User.id == user_id))
@@ -284,8 +252,8 @@ async def patch_rollback_transaction(user_id: int, transaction_id: int, session:
     await session.commit()
 
 
-@app.get("/transactions/analysis", response_model=typing.List[typing.Dict[str, typing.Any]], status_code=status.HTTP_200_OK)
-async def get_transaction_analysis(session: AsyncSession = Depends(get_async_session)) -> typing.List[typing.Dict[str, typing.Any]]:
+@router.get("/transactions/analysis", response_model=typing.List[typing.Dict[str, typing.Any]], status_code=status.HTTP_200_OK)
+async def get_transaction_analysis(session: SessionDep) -> typing.List[typing.Dict[str, typing.Any]]:
     """Get transaction analysis for the last 52 weeks."""
     dt_gt = datetime.now(timezone.utc).date() - timedelta(weeks=1) + timedelta(days=1)
     dt_lt = datetime.now(timezone.utc).date()
@@ -325,7 +293,3 @@ async def get_transaction_analysis(session: AsyncSession = Depends(get_async_ses
         dt_gt -= timedelta(weeks=1)
         dt_lt -= timedelta(weeks=1)
     return results
-
-
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=7999, reload=True)

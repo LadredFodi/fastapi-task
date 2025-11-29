@@ -2,11 +2,10 @@
 
 from datetime import date
 
+from db.models import Transaction, User
+from schemas.pydantic_models import CurrencyEnum
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from db_models import Transaction, User
-from python_models import CurrencyEnum
 
 EXCHANGE_RATES_TO_USD = {
     CurrencyEnum.USD: 1,
