@@ -10,9 +10,12 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
+    networks:
+      - app-network
 
   fastapi-app:
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    command: sh -c "cd /app/app && uvicorn main:app --host 0.0.0.0 --port 8000"
+    working_dir: /app/app
     build:
       context: .
       dockerfile: ./app/Dockerfile
@@ -22,7 +25,52 @@ services:
       - ./app/.env
     depends_on:
       - postgres
+    networks:
+      - app-network
     restart: unless-stopped
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: ./app/Dockerfile
+    command: celery -A services.celery.celery worker --loglevel=info --pool=eventlet --concurrency=4
+    volumes:
+      - .:/app
+    env_file:
+      - ./app/.env
+    depends_on:
+      - rabbitmq
+    networks:
+      - app-network
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: ./app/Dockerfile
+    command: celery -A services.celery.celery beat --loglevel=info
+    volumes:
+      - .:/app
+    env_file:
+      - ./app/.env
+    depends_on:
+      - rabbitmq
+    networks:
+      - app-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbitmq
+      RABBITMQ_DEFAULT_PASS: rabbitmq
+    networks:
+      - app-network
+
 
 volumes:
   postgres_data:
+
+
+networks:
+  app-network:
+    driver: bridge
