@@ -25,5 +25,12 @@ class UserStatusEnum(StrEnum):
 class TransactionStatusEnum(StrEnum):
     """Enumeration of transaction statuses."""
 
-    processed = "PROCESSED"
-    roll_backed = "ROLLBACKED"
+    PROCESSED = "PROCESSED"
+    ROLLBACKED = "ROLLBACKED"
+
+
+class TransactionTypeEnum(StrEnum):
+    """Enumeration of transaction types."""
+
+    DEPOSIT = "DEPOSIT"
+    WITHDRAW = "WITHDRAW"

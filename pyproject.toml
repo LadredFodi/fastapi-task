@@ -13,7 +13,11 @@ fastapi = "^0.115.6"
 sqlalchemy = "^2.0.37"
 asyncpg = "^0.29.0"
 psycopg2-binary = "^2.9.9"
+pydantic = {extras = ["email"], version = "^2.0.0"}
 pydantic-settings = "^2.1.0"
+celery = "^5.3.4"
+eventlet = "^0.36.1"
+nest-asyncio = "^1.6.0"
 
 
 [tool.poetry.group.dev.dependencies]
