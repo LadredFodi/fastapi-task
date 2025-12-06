@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import cast
 
+from db.db import commit_and_refresh
 from db.models import UserBalance
 from fastapi import status
 from schemas.enums import CurrencyEnum
@@ -17,8 +18,7 @@ class BalanceService:
 
         user_balance = UserBalance(user_id=user_id, currency=currency, amount=0)
         session.add(user_balance)
-        await session.commit()
-        await session.refresh(user_balance)
+        await commit_and_refresh(session, user_balance)
         return user_balance
 
     @staticmethod
@@ -35,8 +35,7 @@ class BalanceService:
         result = await session.execute(select(UserBalance).where(UserBalance.user_id == user_id, UserBalance.currency == currency))
         user_balance = result.scalar_one()
         user_balance.amount += amount
-        await session.commit()
-        await session.refresh(user_balance)
+        await commit_and_refresh(session, user_balance)
         return cast(UserBalance, user_balance)
 
     @staticmethod
@@ -47,6 +46,5 @@ class BalanceService:
         if user_balance.amount - amount < 0:
             raise NegativeBalanceException(status_code=status.HTTP_400_BAD_REQUEST, detail="Negative balance")
         user_balance.amount -= amount
-        await session.commit()
-        await session.refresh(user_balance)
+        await commit_and_refresh(session, user_balance)
         return cast(UserBalance, user_balance)

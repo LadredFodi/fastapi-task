@@ -37,13 +37,13 @@ async def make_analysis(session: AsyncSession):
     dt_lt = datetime.now(timezone.utc).date()
     results = []
     for i in range(52):
-        registered_users_count = await QueryService.get_registered_users_count(session, dt_gt=dt_gt, dt_lt=dt_lt)
-        registered_and_deposit_users_count = await QueryService.get_registered_and_deposit_users_count(session, dt_gt=dt_gt, dt_lt=dt_lt)
-        registered_and_not_rollbacked_deposit_users_count = await QueryService.get_registered_and_not_rollbacked_deposit_users_count(session, dt_gt=dt_gt, dt_lt=dt_lt)
-        not_rollbacked_deposit_amount = await QueryService.get_not_rollbacked_deposit_amount(session, dt_gt=dt_gt, dt_lt=dt_lt)
-        not_rollbacked_withdraw_amount = await QueryService.get_not_rollbacked_withdraw_amount(session, dt_gt=dt_gt, dt_lt=dt_lt)
-        transactions_count = await QueryService.get_transactions_count(session, dt_gt=dt_gt, dt_lt=dt_lt)
-        not_rollbacked_transactions_count = await QueryService.get_not_rollbacked_transactions_count(session, dt_gt=dt_gt, dt_lt=dt_lt)
+        registered_users_count = await QueryService.get_registered_users_count(session=session, dt_gt=dt_gt, dt_lt=dt_lt)
+        registered_and_deposit_users_count = await QueryService.get_registered_and_deposit_users_count(session=session, dt_gt=dt_gt, dt_lt=dt_lt)
+        registered_and_not_rollbacked_deposit_users_count = await QueryService.get_registered_and_not_rollbacked_deposit_users_count(session=session, dt_gt=dt_gt, dt_lt=dt_lt)
+        not_rollbacked_deposit_amount = await QueryService.get_not_rollbacked_deposit_amount(session=session, dt_gt=dt_gt, dt_lt=dt_lt)
+        not_rollbacked_withdraw_amount = await QueryService.get_not_rollbacked_withdraw_amount(session=session, dt_gt=dt_gt, dt_lt=dt_lt)
+        transactions_count = await QueryService.get_transactions_count(session=session, dt_gt=dt_gt, dt_lt=dt_lt)
+        not_rollbacked_transactions_count = await QueryService.get_not_rollbacked_transactions_count(session=session, dt_gt=dt_gt, dt_lt=dt_lt)
         result = {
             "start_date": str(dt_gt),
             "end_date": str(dt_lt),

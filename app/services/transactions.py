@@ -3,6 +3,7 @@
 import typing
 from typing import cast
 
+from db.db import commit_and_refresh
 from db.models import Transaction
 from fastapi import status
 from schemas.enums import TransactionStatusEnum, TransactionTypeEnum
@@ -16,7 +17,6 @@ class TransactionService:
 
     @staticmethod
     async def create_transaction(session: AsyncSession, user_id: int, currency: CurrencyEnum, amount: float, type: TransactionTypeEnum) -> Transaction:
-        """Create transaction for user in database."""
         transaction = Transaction(user_id=user_id, currency=currency, amount=amount, type=type)
         session.add(transaction)
         await session.commit()
@@ -24,7 +24,6 @@ class TransactionService:
 
     @staticmethod
     async def select_transaction(session: AsyncSession, transaction_id: int) -> Transaction:
-        """Select transaction by id in database."""
         q = select(Transaction).where(Transaction.id == transaction_id)
         result = await session.execute(q)
         transaction = result.scalar_one_or_none()
@@ -38,7 +37,6 @@ class TransactionService:
 
     @staticmethod
     async def select_transactions(session: AsyncSession, user_id: typing.Optional[int] = None) -> typing.List[Transaction]:
-        """Select transactions for user in database."""
         if user_id is not None:
             q = select(Transaction).where(Transaction.user_id == user_id).order_by(Transaction.created.desc())
         else:
@@ -49,10 +47,8 @@ class TransactionService:
 
     @staticmethod
     async def update_transaction(session: AsyncSession, transaction_id: int, status: TransactionStatusEnum) -> Transaction:
-        """Update transaction in database."""
         result = await session.execute(select(Transaction).where(Transaction.id == transaction_id))
         transaction = result.scalar_one()
         transaction.status = status
-        await session.commit()
-        await session.refresh(transaction)
+        await commit_and_refresh(session, transaction)
         return cast(Transaction, transaction)

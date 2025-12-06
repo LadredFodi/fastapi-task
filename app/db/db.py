@@ -22,3 +22,9 @@ async def get_async_session() -> typing.AsyncGenerator[AsyncSession, None]:
 
 
 SessionDep = typing.Annotated[AsyncSession, Depends(get_async_session)]
+
+
+async def commit_and_refresh(session: AsyncSession, obj: typing.Any) -> typing.Any:
+    await session.commit()
+    await session.refresh(obj)
+    return obj

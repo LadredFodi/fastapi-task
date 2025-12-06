@@ -13,7 +13,6 @@ class UserService:
 
     @staticmethod
     async def select_user(session: AsyncSession, user_id: int) -> User:
-        """Select user"""
         result = await session.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
 
@@ -26,8 +25,6 @@ class UserService:
 
     @staticmethod
     async def select_users(session: AsyncSession, user_id: Optional[int] = None, email: Optional[str] = None, user_status: Optional[str] = None) -> list[User]:
-        """Select users"""
-
         q = select(User).order_by(User.created.desc())
         if user_id is not None:
             q = q.where(User.id == user_id)
@@ -41,7 +38,6 @@ class UserService:
 
     @staticmethod
     async def select_users_with_balances(session: AsyncSession, user_id: Optional[int] = None, email: Optional[str] = None, user_status: Optional[str] = None) -> list[User]:
-        """Select users with balances"""
         q = select(User).options(joinedload(User.user_balance)).order_by(User.created.desc())
         if user_id is not None:
             q = q.where(User.id == user_id)
@@ -55,7 +51,6 @@ class UserService:
 
     @staticmethod
     async def create_user(session: AsyncSession, user: RequestUserModel) -> User:
-        """Create user"""
         db_user = await session.execute(select(User).where(User.email == user.email))
         if db_user.scalar():
             raise UserAlreadyExistsException(
@@ -72,8 +67,6 @@ class UserService:
 
     @staticmethod
     async def update_user(session: AsyncSession, user: RequestUserUpdateModel, db_user: User) -> User:
-        """Update user"""
-
         db_user.status = user.status
         await session.commit()
         await session.refresh(db_user)
