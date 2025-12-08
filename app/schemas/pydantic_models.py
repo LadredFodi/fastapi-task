@@ -2,16 +2,18 @@
 
 import typing
 from datetime import datetime
+from decimal import Decimal
 
-from pydantic import BaseModel
-from pydantic.v1 import root_validator
-from schemas.enums import CurrencyEnum, TransactionStatusEnum, UserStatusEnum
+from fastapi import status
+from pydantic import BaseModel, EmailStr, field_validator
+from schemas.enums import CurrencyEnum, TransactionStatusEnum, TransactionTypeEnum, UserStatusEnum
+from schemas.exceptions import BadRequestDataException
 
 
 class RequestUserModel(BaseModel):
     """Model for user creation request."""
 
-    email: str
+    email: EmailStr
 
 
 class RequestUserUpdateModel(BaseModel):
@@ -52,20 +54,25 @@ class UserBalanceModel(BaseModel):
     currency: typing.Optional[CurrencyEnum] = None
     amount: typing.Optional[float] = None
 
-    @root_validator(pre=True)
-    def validate_not_negative(self, values):
+    @field_validator("amount")
+    def validate_not_negative(cls, v):
         """Validate that amount is not negative."""
-        if "amount" in values and values.get("amount"):
-            if values["amount"] < 0:
-                raise ValueError("Amount cannot be negative")
-
-        return values
+        if v < 0:
+            raise BadRequestDataException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Amount cannot be negative")
+        return v
 
 
 class RequestTransactionModel(BaseModel):
     """Model for transaction creation request."""
     currency: CurrencyEnum
-    amount: float
+    amount: Decimal
+
+    @field_validator("amount")
+    def validate_amount_not_zero(cls, v):
+        """Validate that amount is not zero."""
+        if v == 0:
+            raise BadRequestDataException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Transaction can not have zero amount")
+        return v
 
 
 class TransactionModel(BaseModel):
@@ -74,6 +81,7 @@ class TransactionModel(BaseModel):
     id: typing.Optional[int]
     user_id: typing.Optional[int] = None
     currency: typing.Optional[CurrencyEnum] = None
-    amount: typing.Optional[float] = None
+    amount: typing.Optional[Decimal] = None
     status: typing.Optional[TransactionStatusEnum] = None
+    type: typing.Optional[TransactionTypeEnum] = None
     created: typing.Optional[datetime] = None
